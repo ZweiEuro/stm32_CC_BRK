@@ -1,0 +1,7 @@
+{
+    "rust-analyzer.checkOnSave": false,
+    "rust-analyzer.runnables.extraArgs": [
+        "--target",
+        "thumbv6m-none-eabi"
+    ]
+}
