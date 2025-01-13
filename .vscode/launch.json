@@ -1,17 +1,81 @@
 {
-    // Use IntelliSense to learn about possible attributes.
-    // Hover to view descriptions of existing attributes.
-    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Cortex Debug",
-            "cwd": "${workspaceFolder}",
-            "executable": "./target/thumbv6m-none-eabi/release/rust-blinky",
+            "preLaunchTask": "cargo_build_debug",
+            "type": "probe-rs-debug",
             "request": "launch",
-            "type": "cortex-debug",
-            "runToEntryPoint": "main",
-            "servertype": "stlink"
-        }
+            "name": "probe-rs-debugger",
+            // "server": "127.0.0.1:50001", // For connecting to an existing probe-rs-debugger process
+            "chip": "STM32F030F4Px",
+            "cwd": "${workspaceFolder}",
+            "coreConfigs": [
+                {
+                    "programBinary": "target/thumbv6m-none-eabi/debug/${workspaceFolderBasename}",
+                    "coreIndex": 0,
+                    "svdFile": "stm32f030.svd.patched",
+                    "rttEnabled": true,
+                    "rttChannelFormats": [
+                        {
+                            "dataFormat": "String",
+                            "channelNumber": 0,
+                            "showTimestamps": true
+                        }
+                    ],
+                },
+            ],
+            "runtimeArgs": [
+                "dap-server"
+            ],
+            "flashingConfig": {
+                "flashingEnabled": true,
+                "haltAfterReset": false,
+                "formatOptions": {
+                    "format": "elf" //!MODIFY (or remove). Valid values are: 'bin', 'hex', 'elf'(default), 'idf'
+                }
+            },
+            "connectUnderReset": false,
+            "consoleLogLevel": "Console" //Info, Debug
+            //"speed": 24000, //!MODIFY (or remove)
+            //"probe": "VID:PID:<Serial>", //!MODIFY (or remove)
+        },
+        {
+            "preLaunchTask": "cargo_build_release",
+            "type": "probe-rs-debug",
+            "request": "launch",
+            "name": "probe-rs-release",
+            // "server": "127.0.0.1:50001", // For connecting to an existing probe-rs-debugger process
+            "chip": "STM32F030F4Px",
+            "cwd": "${workspaceFolder}",
+            "coreConfigs": [
+                {
+                    "programBinary": "target/thumbv6m-none-eabi/release/blink",
+                    "coreIndex": 0,
+                    "svdFile": "stm32f030.svd.patched",
+                    "rttEnabled": true,
+                    "rttChannelFormats": [
+                        {
+                            "dataFormat": "String",
+                            "channelNumber": 0,
+                            "showTimestamps": true
+                        }
+                    ],
+                },
+            ],
+            "runtimeArgs": [
+                "dap-server"
+            ],
+            "flashingConfig": {
+                "flashingEnabled": true,
+                "haltAfterReset": false,
+                "formatOptions": {
+                    "format": "elf" //!MODIFY (or remove). Valid values are: 'bin', 'hex', 'elf'(default), 'idf'
+                }
+            },
+            "connectUnderReset": false,
+            "consoleLogLevel": "Console" //Info, Debug
+            //"speed": 24000, //!MODIFY (or remove)
+            //"probe": "VID:PID:<Serial>", //!MODIFY (or remove)
+        },
     ]
 }
