@@ -152,7 +152,7 @@ fn main() -> ! {
 
             {
                 // Set PA9 as a capture pin
-                let _ = gpioa.pa9.into_pull_down_input(cs);
+                let _ = gpioa.pa9.into_alternate_af2(cs);
             }
 
             {
@@ -221,8 +221,8 @@ fn main() -> ! {
 
             unsafe {
                 nvic.set_priority(Interrupt::TIM3, 1);
-                nvic.set_priority(Interrupt::TIM1_BRK_UP_TRG_COM, 2);
-                nvic.set_priority(Interrupt::TIM1_CC, 3);
+                nvic.set_priority(Interrupt::TIM1_BRK_UP_TRG_COM, 1);
+                nvic.set_priority(Interrupt::TIM1_CC, 1);
                 cortex_m::peripheral::NVIC::unmask(Interrupt::TIM3);
                 cortex_m::peripheral::NVIC::unmask(Interrupt::TIM1_BRK_UP_TRG_COM);
                 cortex_m::peripheral::NVIC::unmask(Interrupt::TIM1_CC);
