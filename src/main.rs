@@ -61,8 +61,20 @@ fn TIM3() {
     int.wait().ok();
 }
 
+fn dump_flags() {
+    unsafe {
+        let tim1 = &*TIM1::ptr();
+        // tim1.cnt
+
+        defmt::info!("---- capture value: {}", tim1.ccr1.read().ccr().bits());
+        defmt::info!(" Flag Registry {:b}", tim1.sr.read().bits());
+    }
+}
+
 #[interrupt]
 fn TIM1_BRK_UP_TRG_COM() {
+    defmt::info!("---- TIM1_BRK_UP_TRG_COM interrupt");
+
     // clear the interrupt pin
     unsafe {
         let tim1 = &*TIM1::ptr();
@@ -78,9 +90,7 @@ fn TIM1_BRK_UP_TRG_COM() {
 
 #[interrupt]
 fn TIM1_CC() {
-    static mut LED_CC: Option<CcLed> = None;
-
-    defmt::info!("TIM1_CC interrupt");
+    /*static mut LED_CC: Option<CcLed> = None;
 
     let led_cc = LED_CC.get_or_insert_with(|| {
         cortex_m::interrupt::free(|cs| {
@@ -89,30 +99,29 @@ fn TIM1_CC() {
         })
     });
     led_cc.toggle().ok();
+    */
 
-    // clear the interrupt bit
     unsafe {
+        // clear the interrupt bit
         let tim1 = &*TIM1::ptr();
-        // tim1.cnt
 
-        defmt::info!("capture value: {}", tim1.ccr1.read().ccr().bits());
+        if tim1.sr.read().cc2if().bit_is_set() {
+            defmt::info!("---- TIM1_CC interrupt: CC2IF");
+        }
+        if tim1.sr.read().cc1if().bit_is_set() {
+            defmt::info!("---- TIM1_CC interrupt: CC1IF");
+        }
+        if tim1.sr.read().uif().bit_is_set() {
+            defmt::info!("---- TIM1_CC interrupt: UIF");
+        } else {
+            defmt::info!("---- TIM1_CC interrupt: unknown");
+        }
 
-        let OC_flag = tim1.sr.read().cc2of().bit_is_set();
-        let break_int_flag = tim1.sr.read().bif().bit_is_set();
-        let trigger_int_flag = tim1.sr.read().tif().bit_is_set();
-        let commutation_int_flag = tim1.sr.read().cc2of().bit_is_set();
-        let updatE_interrupt_flag = tim1.sr.read().uif().bit_is_set();
+        dump_flags();
 
-        defmt::info!("OC flag: {}", OC_flag);
-        defmt::info!("break interrupt flag: {}", break_int_flag);
-        defmt::info!("trigger interrupt flag: {}", trigger_int_flag);
-        defmt::info!("commutation interrupt flag: {}", commutation_int_flag);
-        defmt::info!("update interrupt flag: {}", updatE_interrupt_flag);
-
+        tim1.sr.write(|w| w.cc1if().clear_bit());
+        tim1.sr.write(|w| w.cc2if().clear_bit());
         tim1.sr.write(|w| w.uif().clear_bit());
-        tim1.sr.write(|w| w.cc2of().clear_bit());
-        tim1.sr.write(|w| w.bif().clear_bit());
-        tim1.sr.write(|w| w.tif().clear_bit());
     }
 }
 
@@ -145,7 +154,7 @@ fn main() -> ! {
                 // Set up a timer expiring after 1s
                 // Generate an interrupt when the timer expires
                 // Move the timer into our global storage
-                let mut timer = Timer::tim3(p.TIM3, Hertz(5), &mut rcc);
+                let mut timer = Timer::tim3(p.TIM3, Hertz(1), &mut rcc);
                 timer.listen(Event::TimeOut);
                 *GINT.borrow(cs).borrow_mut() = Some(timer);
             }
@@ -156,58 +165,77 @@ fn main() -> ! {
             }
 
             {
+                /*
+                 * Try to bind TIM1 to the PA9 pin as "input".
+                 * TIM1 should count up continuously and on every capture TIM1_CC should fire.
+                 * On every "overflow" TIM1_BRK_UP_TRG_COM should fire so we can reset it and handle that case properly
+                 *
+                 * Optionally: use SMS (Slave mode select) in order to "reset" the counter on each capture
+                 *
+                 * Steps taken from stm32-hal at https://github.com/David-OConnor/stm32-hal/blob/main/src/timer.rs#L1049
+                 * 0. Disable counter and input capture compare
+                 * 1. Select active input for TIMx_CCR1, which is the counter capture register. "Capture compare input"
+                 *      - In our case we want TIM1 to count CCR1 up
+                 *      - disable the capture compare first: CCMR.CC1E = 0  <- done before
+                 *      - CCMR.CC1S to 01 -> CC1 channel will be mapped to TI1
+                 * 2. Select a proper source
+                 *      - Default is internal clock which is fine
+                 * 3. Input filter of the COUNTER
+                 *      - Since we are counting from internal we divide the internal clock by this value before counting
+                 *      - This is "the minimum up-time for a signal needed to be counted as valid"
+                 *      - but since we are using the internal clock we can set this to 0
+                 *      - BUT in the example i am following its hard coded to 0011 so i am using that
+                 * 4. Set the polarity of the input capture:
+                 *      - CCER.CC1P = 0, CCER.CC1NP = 0 -> rising edge
+                 *      - CCER.CC1P = 1, CCER.CC1NP = 1 -> any edge    <- This is eventually what i want
+                 * 5. Set the prescalar for the counter input source (which is the internal clock)
+                 *      - PSC = 0 would make it overflow constantly, i wanne slow it down a bit
+                 * 6. Enable capturing from the counter into the capturing register
+                 * 7. Enable "update" interrupt and "capture compare" interrupt
+                 */
                 // advanced timer for input capturing
                 let tim1 = p.TIM1;
 
                 // Set counting mode to edge aligned = count from 0 to 16bit max
+                // 0
                 defmt::assert!(tim1.cr1.read().cen().is_disabled()); // must be disabled (is anyways but just to be sure)
+                tim1.ccer.write(|w| w.cc1e().clear_bit()); // disable capture compare channel 1
 
-                // set direction and upcounting
-                tim1.cr1.write(|w| w.dir().clear_bit()); // 0 = up counting
-                tim1.cr1.write(|w| w.cms().edge_aligned()); // count according to direction bit
+                // wire CH1, CH2, and CH3 all to TI1
+                tim1.cr2.write(|w| w.ti1s().set_bit());
 
-                // set frequency
+                // 1. Set count direction and alignment
+                tim1.cr1.write(|w| w.dir().up()); // 0 -> upcounting, 1 -> downcounting
+                tim1.cr1.write(|w| w.cms().edge_aligned()); // edge aligned, count in direction of dir
 
-                {
-                    let f = Hertz(1);
+                // 2. source for counting, which is internal which is default so its fine
 
-                    let pclk_ticks_per_timer_period = rcc.clocks.sysclk().0 / f.0;
+                // 3. Set input filter
+                let filter = 0b0000;
+                tim1.ccmr1_input().write(|w| w.ic1f().bits(filter));
+                tim1.ccmr1_input().write(|w| w.cc1s().ti1()); // Select TI1 as input source
 
-                    let psc: Result<u16, _> = (pclk_ticks_per_timer_period - 1).try_into();
+                // makes it blink like mad for some reason v
+                // tim1.ccmr1_input().write(|w| unsafe { w.ic1psc().bits(0) });
 
-                    if psc.is_ok() {
-                        tim1.psc.write(|w| w.psc().bits(psc.unwrap()));
-                        defmt::info!("ticks per time period: {}", pclk_ticks_per_timer_period);
-                    } else {
-                        defmt::warn!("psc value too high");
-                        tim1.psc.write(|w| w.psc().bits(100));
-                    }
+                // 4. set input to rising edge
+                tim1.ccer.write(|w| w.cc1p().set_bit()); // 00 -> rising edge, 11 -> any edge
+                tim1.ccer.write(|w| w.cc1np().set_bit());
 
-                    // Set prescaler to 0
-                    tim1.egr.write(|w| w.ug().set_bit());
-                }
+                // 5. Set TIMER prescaler
+                let psc = 0b1000;
+                tim1.psc.write(|w| w.psc().bits(psc));
 
-                tim1.egr.write(|w| w.ug().set_bit()); // update generation, update thee prescale
+                // 6. Enable capture from counter to the capture register
+                tim1.ccer.write(|w| w.cc1e().set_bit());
 
-                // setup the pin and mode for that pin and channel
-                tim1.ccmr1_input().write(|w| w.cc2s().ti2());
-                tim1.ccmr1_input().write(|w| w.ic2f().bits(0)); // no filter
-
-                tim1.ccer.write(|w| w.cc2p().set_bit().cc2np().set_bit()); // 00 -> rising edge, 11 -> any edge
-
-                tim1.ccmr1_input().write(|w| unsafe { w.ic2psc().bits(0) }); // no prescaler on the input
-
-                tim1.ccer.write(|w| w.cc2e().set_bit()); // enable capture from this counter into the capture register
-
-                // interrupts
-
-                tim1.dier.write(|w| w.cc2ie().set_bit()); // enable input interrupt
-
+                // 7. Enable interrupts
                 tim1.dier.write(|w| w.uie().set_bit()); // seems to control the overflow interrupt?
 
-                // tim1.dier.write(|w| w.tie().set_bit());
-                // tim1.dier.write(|w| w.bie().set_bit());
-                // tim1.dier.write(|w| w.comie().set_bit());
+                tim1.dier.write(|w| w.cc1ie().set_bit()); // seems to control the capture interrupt?
+
+                // only make the UPDATE interrupt trigger on overflow
+                tim1.cr1.write(|w| w.urs().set_bit()); // only update on overflow
 
                 // enable the counter
                 tim1.cr1.write(|w| w.cen().set_bit()); // enable counter
@@ -223,6 +251,7 @@ fn main() -> ! {
                 nvic.set_priority(Interrupt::TIM3, 1);
                 nvic.set_priority(Interrupt::TIM1_BRK_UP_TRG_COM, 1);
                 nvic.set_priority(Interrupt::TIM1_CC, 1);
+
                 cortex_m::peripheral::NVIC::unmask(Interrupt::TIM3);
                 cortex_m::peripheral::NVIC::unmask(Interrupt::TIM1_BRK_UP_TRG_COM);
                 cortex_m::peripheral::NVIC::unmask(Interrupt::TIM1_CC);
