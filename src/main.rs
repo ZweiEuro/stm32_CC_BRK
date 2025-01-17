@@ -70,7 +70,7 @@ fn TIM3() {
     });
 
     led.toggle().ok();
-    if (led.is_set_high().unwrap()) {
+    if led.is_set_high().unwrap() {
         // The onboard LED is active-low
         // we are using a control LED instead in order to make it less confusing
 
@@ -82,20 +82,21 @@ fn TIM3() {
     int.wait().ok();
 }
 
-fn dump_flags() {
-    unsafe {
-        let tim1 = &*TIM1::ptr();
-        // tim1.cnt
+#[inline]
+unsafe fn dump_sr_reg() {
+    let tim1 = &*TIM1::ptr();
+    // tim1.cnt
 
-        defmt::info!("---- capture value: {}", tim1.ccr1.read().ccr().bits());
-        defmt::info!("Status flags {:b}", tim1.sr.read().bits());
-    }
+    defmt::info!(
+        "---- capture value: {:05} Sr-reg {:b}",
+        tim1.ccr1.read().ccr().bits(),
+        tim1.sr.read().bits()
+    );
 }
 
 #[interrupt]
 fn TIM1_BRK_UP_TRG_COM() {
     defmt::info!("---- TIM1_BRK_UP_TRG_COM interrupt");
-    dump_flags();
     // clear the interrupt pin
     unsafe {
         let tim1 = &*TIM1::ptr();
@@ -106,6 +107,9 @@ fn TIM1_BRK_UP_TRG_COM() {
         } else {
             panic!("interrupt flag not set? Why did this trigger?");
         }
+
+        dump_sr_reg();
+        tim1.sr.write(|w| w.uif().clear_bit());
     }
 }
 
@@ -126,11 +130,10 @@ fn TIM1_CC() {
         let tim1 = &*TIM1::ptr();
 
         defmt::info!("---- TIM1_CC interrupt");
-        dump_flags();
+        dump_sr_reg();
 
-        //tim1.sr.write(|w| w.cc1if().clear_bit());
+        tim1.sr.write(|w| w.cc1if().clear_bit());
     }
-    defmt::info!("interrupt");
 }
 
 #[entry]
@@ -176,6 +179,13 @@ fn main() -> ! {
             }
 
             {
+                /*
+                Current problems:
+                - Rising edge only, it should do both but it doesn't
+                - `update` interrupt is not firing at all?
+                - interrupts are cleared without me clearing them
+                 */
+
                 // advanced timer for input capturing
                 let tim1 = p.TIM1;
 
@@ -201,43 +211,48 @@ fn main() -> ! {
                 tim1.ccmr1_input().write(|w| w.cc1s().ti1()); // Select TI1 as input source
 
                 // makes it blink like mad for some reason v
-                // tim1.ccmr1_input().write(|w| unsafe { w.ic1psc().bits(0) });
+                //tim1.ccmr1_input().write(|w| unsafe { w.ic1psc().bits(0) });
 
                 // 4. set input to rising edge
                 // doesn't make a difference for some rason, always rising edge
-                // tim1.ccer.write(|w| w.cc1p().set_bit()); // 00 -> rising edge, 11 -> any edge
-                // tim1.ccer.write(|w| w.cc1np().set_bit());
+                tim1.ccer.write(|w| w.cc1p().set_bit()); // 00 -> rising edge, 11 -> any edge
+                tim1.ccer.write(|w| w.cc1np().set_bit());
 
                 // 5. Set TIMER prescaler
 
-                // Coutner frequency is:
-                // CK_CNT = fCK_PSC / (PSC[15:0] + 1)
-                // target_hz = 8Mhz / (PSC + 1)
-                // PSC = (8Mhz / target_hz) - 1
-                let target_hz = Hertz(10000); // 1 ms
+                {
+                    // Coutner frequency is:
+                    // CK_CNT = fCK_PSC / (PSC[15:0] + 1)
+                    // target_hz = 8Mhz / (PSC + 1)
+                    // PSC = (8Mhz / target_hz) - 1
+                    let target_hz = Hertz(10000); // 1 ms
 
-                let psc = (rcc.clocks.sysclk().0 / target_hz.0) - 1;
+                    let psc = (rcc.clocks.sysclk().0 / target_hz.0) - 1;
 
-                if psc > 0xFFFF {
-                    panic!("PSC value too large at {}", psc);
+                    if psc > 0xFFFF {
+                        panic!("PSC value too large at {}", psc);
+                    }
+
+                    let psc: u16 = psc.try_into().unwrap();
+
+                    tim1.psc.write(|w| w.psc().bits(psc));
+
+                    // manually generate an update to load the new psc
+                    tim1.egr.write(|w| w.ug().set_bit());
                 }
-
-                let psc: u16 = psc.try_into().unwrap();
-
-                tim1.psc.write(|w| w.psc().bits(psc));
-                // manually generate an update to load the new psc
-                tim1.egr.write(|w| w.ug().set_bit());
 
                 // 6. Enable capture from counter to the capture register
                 tim1.ccer.write(|w| w.cc1e().set_bit());
 
                 // 7. Enable interrupts
                 tim1.dier.write(|w| w.uie().set_bit()); // update interrupt
+
+                // for some reaosn these seem to be mutually exclusive ?! ^ v
                 tim1.dier.write(|w| w.cc1ie().set_bit()); // capture interrupt
 
                 tim1.cr1.write(|w| w.urs().set_bit()); // only fire update-interrupt on overflow
 
-                // enable the counter
+                // 8. Enable the timer
                 tim1.cr1.write(|w| w.cen().set_bit()); // enable counter
 
                 //grab the timer
@@ -248,9 +263,9 @@ fn main() -> ! {
             let mut nvic = cp.NVIC;
 
             unsafe {
-                nvic.set_priority(Interrupt::TIM3, 1);
-                nvic.set_priority(Interrupt::TIM1_BRK_UP_TRG_COM, 1);
-                nvic.set_priority(Interrupt::TIM1_CC, 1);
+                nvic.set_priority(Interrupt::TIM3, 0b1000);
+                nvic.set_priority(Interrupt::TIM1_BRK_UP_TRG_COM, 0b0001);
+                nvic.set_priority(Interrupt::TIM1_CC, 0b0010);
 
                 cortex_m::peripheral::NVIC::unmask(Interrupt::TIM3);
                 cortex_m::peripheral::NVIC::unmask(Interrupt::TIM1_BRK_UP_TRG_COM);
