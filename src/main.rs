@@ -1,28 +1,22 @@
 #![no_main]
 #![no_std]
 
-use stm32f0xx_hal::{
-    self as hal,
-    pac::{rcc, TIM1},
-};
 use {defmt_rtt as _, panic_probe as _};
 
-use crate::hal::{
-    gpio::*,
-    pac::{interrupt, Interrupt, Peripherals, TIM3},
-    prelude::*,
-    time::Hertz,
-    timers::*,
+use stm32f0xx_hal::{
+    pac::TIM1,
+    {
+        gpio::*,
+        pac::{interrupt, Interrupt, Peripherals, TIM3},
+        prelude::*,
+        time::Hertz,
+        timers::*,
+    },
 };
-
-use cortex_m_rt::entry;
 
 use core::{cell::RefCell, convert::TryInto, panic};
-use cortex_m::{
-    asm,
-    interrupt::Mutex,
-    peripheral::{self, Peripherals as c_m_Peripherals},
-};
+use cortex_m::{asm, interrupt::Mutex, peripheral::Peripherals as c_m_Peripherals};
+use cortex_m_rt::entry;
 
 // A type definition for the GPIO pin to be used for our LED
 type OnboardLedPin = gpioa::PA4<Output<PushPull>>;
@@ -133,7 +127,8 @@ fn TIM1_CC() {
         defmt::info!("---- TIM1_CC interrupt");
         dump_sr_reg();
 
-        tim1.sr.write(|w| w.cc1if().clear_bit());
+        // for some reason not needed ? (if UIE=1 and CC2E=1)
+        //tim1.sr.write(|w| w.cc1if().clear_bit());
     }
 }
 
@@ -158,17 +153,19 @@ fn main() -> ! {
                 let led = gpioa.pa4.into_push_pull_output(cs);
                 *ONBOARD_LED.borrow(cs).borrow_mut() = Some(led);
 
+                // This is just a control LED. With a logic analyser it makes it really easy to see when the interrupt is triggered
                 let control_led = gpioa.pa3.into_push_pull_output(cs);
                 *CONTROL_LED.borrow(cs).borrow_mut() = Some(control_led);
 
-                let cc_led = gpioa.pa10.into_push_pull_output(cs);
-                *CC_LED.borrow(cs).borrow_mut() = Some(cc_led);
+                // PA4 is the onbaord LED, but PA4 is active low. This is the same just flipped so on a logic analyser it's easier to see
+                let not_pa4 = gpioa.pa10.into_push_pull_output(cs);
+                *CC_LED.borrow(cs).borrow_mut() = Some(not_pa4);
             }
 
             {
                 // Set up a timer expiring after 1s
                 // Generate an interrupt when the timer expires
-                // Move the timer into our global storage
+                // This is used to test input capture by toggling PA4
                 let mut timer = Timer::tim3(p.TIM3, Hertz(1), &mut rcc);
                 timer.listen(Event::TimeOut);
                 *GINT.borrow(cs).borrow_mut() = Some(timer);
@@ -191,18 +188,13 @@ fn main() -> ! {
                 let tim1 = p.TIM1;
 
                 // Set counting mode to edge aligned = count from 0 to 16bit max
-                // 0
                 defmt::assert!(tim1.cr1.read().cen().is_disabled()); // must be disabled (is anyways but just to be sure)
                 tim1.ccer.write(|w| w.cc2e().clear_bit());
-
-                // wire CH1, CH2, and CH3 all to TI1
-                // This effectively means we are configuring channel 1
-                // tim1.cr2.write(|w| w.ti1s().set_bit());
 
                 // 1. Set count direction and alignment
 
                 {
-                    // Setup timer
+                    // Setup timer, this all seems to work as expected
 
                     tim1.cr1.write(|w| w.dir().up()); // 0 -> upcounting, 1 -> downcounting
                     tim1.cr1.write(|w| w.cms().edge_aligned()); // edge aligned, count in direction of dir
@@ -233,29 +225,42 @@ fn main() -> ! {
 
                 // 3. Set input filter
                 let filter = 0b0000;
-                //tim1.ccmr1_input().write(|w| w.ic1f().bits(filter));
-                tim1.ccmr1_input().write(|w| w.ic2f().bits(filter));
-
-                //tim1.ccmr1_input().write(|w| w.cc1s().ti1());
+                tim1.ccmr1_input().write(|w| w.ic2f().bits(filter)); // reset value
                 tim1.ccmr1_input().write(|w| w.cc2s().ti2());
-                // tim1.ccmr1_input().write(|w| w.cc2s().ti1());
 
-                // makes it blink like mad for some reason v
-                //tim1.ccmr1_input().write(|w| unsafe { w.ic1psc().bits(0) });
+                /*
+                Explicitly setting IC2PSC to 0
+                Doing this makes it:
+                - Require clearing of IC2F to 0 in TIM1_CC, otherwise it loops forever (not setting ic2psc makes it *NOT* required to clear that flag?)
+
+                Expected: To have the correct PSC behavior, or none at all with 0
+                */
+                // tim1.ccmr1_input().write(|w| unsafe { w.ic2psc().bits(0) });
 
                 // 4. set input to rising edge
-                // doesn't make a difference for some rason, always rising edge
-                tim1.ccer.write(|w| w.cc2p().set_bit()); // 00 -> rising edge, 11 -> any edge
-                tim1.ccer.write(|w| w.cc2np().clear_bit());
+                /*
+                Doesn't make a difference for some rason, always rising edge
+                Reading CCER also shows that they are 0 even after directly setting them?
+
+                Expected: Correctly triggering TIM1_CC on rising and falling edges
+                */
+                tim1.ccer.write(|w| w.cc2p().set_bit()); // 00 -> rising edge, 11 -> any edge according to docs
+                tim1.ccer.write(|w| w.cc2np().set_bit());
 
                 // 6. Enable capture from counter to the capture register
-                //tim1.ccer.write(|w| w.cc1e().set_bit());
                 tim1.ccer.write(|w| w.cc2e().set_bit());
 
                 // 7. Enable interrupts
+                /*
+                Strange behavior:
+                - Setting UIE=1 and CC2E=1 makes ONLY TIM1_CC work?
+                - Setting UIE=1 and CC2E=0 makes TIM1_BRK_UP_TRG_COM work as expected with correct values (on every overflow)
+                - URS seems to work as expected but it's hard to tell from the other behavior
+
+                Expected behavior: TIM1_CC should trigger on every rising/falling edge, TIM1_BRK_UP_TRG_COM should trigger on every overflow
+                */
                 tim1.dier.write(|w| w.uie().set_bit()); // update interrupt
                 tim1.cr1.write(|w| w.urs().set_bit()); // only fire update-interrupt on overflow
-                                                       //tim1.dier.write(|w| w.cc1ie().set_bit()); // capture interrupt
                 tim1.dier.write(|w| w.cc2ie().set_bit()); // capture interrupt
 
                 // 8. Enable the timer
@@ -265,7 +270,7 @@ fn main() -> ! {
                 *ADV_TIMER.borrow(cs).borrow_mut() = Some(tim1);
             }
 
-            // Enable TIM7 IRQ, set prio 1 and clear any pending IRQs
+            // Set prio and clear flags
             let mut nvic = cp.NVIC;
 
             unsafe {
