@@ -88,8 +88,9 @@ unsafe fn dump_sr_reg() {
     // tim1.cnt
 
     defmt::info!(
-        "---- capture value: {:05} Sr-reg {:b}",
+        "---- capture value: CR1 {:05} CR2: {:05} Sr-reg {:b}",
         tim1.ccr1.read().ccr().bits(),
+        tim1.ccr2.read().ccr().bits(),
         tim1.sr.read().bits()
     );
 }
@@ -192,11 +193,11 @@ fn main() -> ! {
                 // Set counting mode to edge aligned = count from 0 to 16bit max
                 // 0
                 defmt::assert!(tim1.cr1.read().cen().is_disabled()); // must be disabled (is anyways but just to be sure)
-                tim1.ccer.write(|w| w.cc1e().clear_bit()); // disable capture compare channel 1
+                tim1.ccer.write(|w| w.cc2e().clear_bit());
 
                 // wire CH1, CH2, and CH3 all to TI1
                 // This effectively means we are configuring channel 1
-                tim1.cr2.write(|w| w.ti1s().set_bit());
+                // tim1.cr2.write(|w| w.ti1s().set_bit());
 
                 // 1. Set count direction and alignment
 
@@ -232,27 +233,30 @@ fn main() -> ! {
 
                 // 3. Set input filter
                 let filter = 0b0000;
-                tim1.ccmr1_input().write(|w| w.ic1f().bits(filter));
-                tim1.ccmr1_input().write(|w| w.cc1s().ti1()); // Select TI1 as input source
+                //tim1.ccmr1_input().write(|w| w.ic1f().bits(filter));
+                tim1.ccmr1_input().write(|w| w.ic2f().bits(filter));
+
+                //tim1.ccmr1_input().write(|w| w.cc1s().ti1());
+                tim1.ccmr1_input().write(|w| w.cc2s().ti2());
+                // tim1.ccmr1_input().write(|w| w.cc2s().ti1());
 
                 // makes it blink like mad for some reason v
                 //tim1.ccmr1_input().write(|w| unsafe { w.ic1psc().bits(0) });
 
                 // 4. set input to rising edge
                 // doesn't make a difference for some rason, always rising edge
-                tim1.ccer.write(|w| w.cc1p().set_bit()); // 00 -> rising edge, 11 -> any edge
-                tim1.ccer.write(|w| w.cc1np().set_bit());
+                tim1.ccer.write(|w| w.cc2p().set_bit()); // 00 -> rising edge, 11 -> any edge
+                tim1.ccer.write(|w| w.cc2np().clear_bit());
 
                 // 6. Enable capture from counter to the capture register
-                tim1.ccer.write(|w| w.cc1e().set_bit());
+                //tim1.ccer.write(|w| w.cc1e().set_bit());
+                tim1.ccer.write(|w| w.cc2e().set_bit());
 
                 // 7. Enable interrupts
                 tim1.dier.write(|w| w.uie().set_bit()); // update interrupt
-
-                // for some reaosn these seem to be mutually exclusive ?! ^ v
-                tim1.dier.write(|w| w.cc1ie().set_bit()); // capture interrupt
-
                 tim1.cr1.write(|w| w.urs().set_bit()); // only fire update-interrupt on overflow
+                                                       //tim1.dier.write(|w| w.cc1ie().set_bit()); // capture interrupt
+                tim1.dier.write(|w| w.cc2ie().set_bit()); // capture interrupt
 
                 // 8. Enable the timer
                 tim1.cr1.write(|w| w.cen().set_bit()); // enable counter
