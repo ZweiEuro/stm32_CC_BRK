@@ -199,29 +199,15 @@ fn main() -> ! {
                 tim1.cr2.write(|w| w.ti1s().set_bit());
 
                 // 1. Set count direction and alignment
-                tim1.cr1.write(|w| w.dir().up()); // 0 -> upcounting, 1 -> downcounting
-                tim1.cr1.write(|w| w.cms().edge_aligned()); // edge aligned, count in direction of dir
-
-                // 2. source for counting, which is internal which is default so its fine
-                // empty
-
-                // 3. Set input filter
-                let filter = 0b0000;
-                tim1.ccmr1_input().write(|w| w.ic1f().bits(filter));
-                tim1.ccmr1_input().write(|w| w.cc1s().ti1()); // Select TI1 as input source
-
-                // makes it blink like mad for some reason v
-                //tim1.ccmr1_input().write(|w| unsafe { w.ic1psc().bits(0) });
-
-                // 4. set input to rising edge
-                // doesn't make a difference for some rason, always rising edge
-                tim1.ccer.write(|w| w.cc1p().set_bit()); // 00 -> rising edge, 11 -> any edge
-                tim1.ccer.write(|w| w.cc1np().set_bit());
-
-                // 5. Set TIMER prescaler
 
                 {
-                    // Coutner frequency is:
+                    // Setup timer
+
+                    tim1.cr1.write(|w| w.dir().up()); // 0 -> upcounting, 1 -> downcounting
+                    tim1.cr1.write(|w| w.cms().edge_aligned()); // edge aligned, count in direction of dir
+
+                    // set timer frequency
+                    // Counter frequency is:
                     // CK_CNT = fCK_PSC / (PSC[15:0] + 1)
                     // target_hz = 8Mhz / (PSC + 1)
                     // PSC = (8Mhz / target_hz) - 1
@@ -240,6 +226,22 @@ fn main() -> ! {
                     // manually generate an update to load the new psc
                     tim1.egr.write(|w| w.ug().set_bit());
                 }
+
+                // 2. source for counting, which is internal which is default so its fine
+                // empty
+
+                // 3. Set input filter
+                let filter = 0b0000;
+                tim1.ccmr1_input().write(|w| w.ic1f().bits(filter));
+                tim1.ccmr1_input().write(|w| w.cc1s().ti1()); // Select TI1 as input source
+
+                // makes it blink like mad for some reason v
+                //tim1.ccmr1_input().write(|w| unsafe { w.ic1psc().bits(0) });
+
+                // 4. set input to rising edge
+                // doesn't make a difference for some rason, always rising edge
+                tim1.ccer.write(|w| w.cc1p().set_bit()); // 00 -> rising edge, 11 -> any edge
+                tim1.ccer.write(|w| w.cc1np().set_bit());
 
                 // 6. Enable capture from counter to the capture register
                 tim1.ccer.write(|w| w.cc1e().set_bit());
