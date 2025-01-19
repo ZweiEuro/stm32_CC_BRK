@@ -11,4 +11,4 @@ cortex-m-rt = {version = "0.7.0", features = ["device"]}
 defmt = "0.3"
 defmt-rtt = "0.4"
 panic-probe = { version = "0.3", features = ["print-defmt"] }
-stm32f0xx-hal = { version = "0.18", features = ["stm32f030x6", "rt"]}
+stm32f0xx-hal = { version = "0.18", features = ["stm32f030x4", "rt"]}
