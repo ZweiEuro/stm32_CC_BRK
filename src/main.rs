@@ -98,13 +98,13 @@ fn TIM1_BRK_UP_TRG_COM() {
 
         if tim1.sr.read().uif().bit_is_set() {
             defmt::info!("tim1 overflowed");
-            //tim1.sr.write(|w| w.uif().clear_bit());
+            //tim1.sr.modify(|_,w| w.uif().clear_bit());
         } else {
             panic!("interrupt flag not set? Why did this trigger?");
         }
 
         dump_sr_reg();
-        tim1.sr.write(|w| w.uif().clear_bit());
+        tim1.sr.modify(|_, w| w.uif().clear_bit());
     }
 }
 
@@ -128,7 +128,7 @@ fn TIM1_CC() {
         dump_sr_reg();
 
         // for some reason not needed ? (if UIE=1 and CC2E=1)
-        //tim1.sr.write(|w| w.cc1if().clear_bit());
+        tim1.sr.modify(|_, w| w.cc2if().clear_bit());
     }
 }
 
@@ -136,7 +136,7 @@ fn TIM1_CC() {
 fn main() -> ! {
     if let (Some(mut p), Some(cp)) = (Peripherals::take(), c_m_Peripherals::take()) {
         cortex_m::interrupt::free(move |cs| {
-            p.RCC.apb2enr.write(|w| w.tim1en().set_bit());
+            p.RCC.apb2enr.modify(|_, w| w.tim1en().set_bit());
 
             let mut rcc = p
                 .RCC
@@ -189,15 +189,15 @@ fn main() -> ! {
 
                 // Set counting mode to edge aligned = count from 0 to 16bit max
                 defmt::assert!(tim1.cr1.read().cen().is_disabled()); // must be disabled (is anyways but just to be sure)
-                tim1.ccer.write(|w| w.cc2e().clear_bit());
+                tim1.ccer.modify(|_, w| w.cc2e().clear_bit());
 
                 // 1. Set count direction and alignment
 
                 {
                     // Setup timer, this all seems to work as expected
 
-                    tim1.cr1.write(|w| w.dir().up()); // 0 -> upcounting, 1 -> downcounting
-                    tim1.cr1.write(|w| w.cms().edge_aligned()); // edge aligned, count in direction of dir
+                    tim1.cr1.modify(|_, w| w.dir().up()); // 0 -> upcounting, 1 -> downcounting
+                    tim1.cr1.modify(|_, w| w.cms().edge_aligned()); // edge aligned, count in direction of dir
 
                     // set timer frequency
                     // Counter frequency is:
@@ -214,7 +214,7 @@ fn main() -> ! {
 
                     let psc: u16 = psc.try_into().unwrap();
 
-                    tim1.psc.write(|w| w.psc().bits(psc));
+                    tim1.psc.modify(|_, w| w.psc().bits(psc));
 
                     // manually generate an update to load the new psc
                     tim1.egr.write(|w| w.ug().set_bit());
@@ -225,8 +225,8 @@ fn main() -> ! {
 
                 // 3. Set input filter
                 let filter = 0b0000;
-                tim1.ccmr1_input().write(|w| w.ic2f().bits(filter)); // reset value
-                tim1.ccmr1_input().write(|w| w.cc2s().ti2());
+                tim1.ccmr1_input().modify(|_, w| w.ic2f().bits(filter)); // reset value
+                tim1.ccmr1_input().modify(|_, w| w.cc2s().ti2());
 
                 /*
                 Explicitly setting IC2PSC to 0
@@ -235,7 +235,7 @@ fn main() -> ! {
 
                 Expected: To have the correct PSC behavior, or none at all with 0
                 */
-                // tim1.ccmr1_input().write(|w| unsafe { w.ic2psc().bits(0) });
+                // tim1.ccmr1_input().modify(|_,w| unsafe { w.ic2psc().bits(0) });
 
                 // 4. set input to rising edge
                 /*
@@ -244,11 +244,11 @@ fn main() -> ! {
 
                 Expected: Correctly triggering TIM1_CC on rising and falling edges
                 */
-                tim1.ccer.write(|w| w.cc2p().set_bit()); // 00 -> rising edge, 11 -> any edge according to docs
-                tim1.ccer.write(|w| w.cc2np().set_bit());
+                tim1.ccer.modify(|_, w| w.cc2p().set_bit()); // 00 -> rising edge, 11 -> any edge according to docs
+                tim1.ccer.modify(|_, w| w.cc2np().set_bit());
 
                 // 6. Enable capture from counter to the capture register
-                tim1.ccer.write(|w| w.cc2e().set_bit());
+                tim1.ccer.modify(|_, w| w.cc2e().set_bit());
 
                 // 7. Enable interrupts
                 /*
@@ -259,12 +259,12 @@ fn main() -> ! {
 
                 Expected behavior: TIM1_CC should trigger on every rising/falling edge, TIM1_BRK_UP_TRG_COM should trigger on every overflow
                 */
-                tim1.dier.write(|w| w.uie().set_bit()); // update interrupt
-                tim1.cr1.write(|w| w.urs().set_bit()); // only fire update-interrupt on overflow
-                tim1.dier.write(|w| w.cc2ie().set_bit()); // capture interrupt
+                tim1.dier.modify(|_, w| w.uie().set_bit()); // update interrupt
+                tim1.cr1.modify(|_, w| w.urs().set_bit()); // only fire update-interrupt on overflow
+                tim1.dier.modify(|_, w| w.cc2ie().set_bit()); // capture interrupt
 
                 // 8. Enable the timer
-                tim1.cr1.write(|w| w.cen().set_bit()); // enable counter
+                tim1.cr1.modify(|_, w| w.cen().set_bit()); // enable counter
 
                 //grab the timer
                 *ADV_TIMER.borrow(cs).borrow_mut() = Some(tim1);
