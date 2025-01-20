@@ -3,6 +3,7 @@
 edition = "2018"
 name = "rusty-blink"
 version = "0.1.0"
+required-features = ["clock_8_mhz"]
 
 
 [dependencies]
@@ -12,3 +13,7 @@ defmt = "0.3"
 defmt-rtt = "0.4"
 panic-probe = { version = "0.3", features = ["print-defmt"] }
 stm32f0xx-hal = { version = "0.18", features = ["stm32f030x4", "rt"]}
+
+[features]
+default = [ "clock_8_mhz" ] 
+clock_8_mhz = []

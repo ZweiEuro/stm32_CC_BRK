@@ -1,8 +1,14 @@
 #![no_main]
 #![no_std]
 
+#[cfg(not(any(feature = "clock_8_mhz")))]
+compile_error!("A clock frequency must be specified");
+
+mod input;
+
 use {defmt_rtt as _, panic_probe as _};
 
+use input::setup_timer;
 use stm32f0xx_hal::{
     pac::TIM1,
     {
@@ -31,7 +37,6 @@ static CONTROL_LED: Mutex<RefCell<Option<ControlLed>>> = Mutex::new(RefCell::new
 // Make timer interrupt registers globally available
 static GINT: Mutex<RefCell<Option<Timer<TIM3>>>> = Mutex::new(RefCell::new(None));
 
-static ADV_TIMER: Mutex<RefCell<Option<TIM1>>> = Mutex::new(RefCell::new(None));
 static CC_LED: Mutex<RefCell<Option<CcLed>>> = Mutex::new(RefCell::new(None));
 
 // Define an interupt handler, i.e. function to call when interrupt occurs. Here if our external
@@ -76,19 +81,6 @@ fn TIM3() {
     int.wait().ok();
 }
 
-#[inline]
-unsafe fn dump_sr_reg() {
-    let tim1 = &*TIM1::ptr();
-    // tim1.cnt
-
-    defmt::info!(
-        "---- capture value: CR1 {:05} CR2: {:05} Sr-reg {:b}",
-        tim1.ccr1.read().ccr().bits(),
-        tim1.ccr2.read().ccr().bits(),
-        tim1.sr.read().bits()
-    );
-}
-
 #[interrupt]
 fn TIM1_BRK_UP_TRG_COM() {
     defmt::info!("---- TIM1_BRK_UP_TRG_COM interrupt");
@@ -103,7 +95,6 @@ fn TIM1_BRK_UP_TRG_COM() {
             panic!("interrupt flag not set? Why did this trigger?");
         }
 
-        dump_sr_reg();
         tim1.sr.modify(|_, w| w.uif().clear_bit());
     }
 }
@@ -124,8 +115,7 @@ fn TIM1_CC() {
         // clear the interrupt bit
         let tim1 = &*TIM1::ptr();
 
-        defmt::info!("---- TIM1_CC interrupt");
-        dump_sr_reg();
+        defmt::info!("---- TIM1_CC interrupt {:05}", tim1.ccr2.read().bits());
 
         // for some reason not needed ? (if UIE=1 and CC2E=1)
         tim1.sr.modify(|_, w| w.cc2if().clear_bit());
@@ -176,99 +166,7 @@ fn main() -> ! {
                 let _ = gpioa.pa9.into_alternate_af2(cs);
             }
 
-            {
-                /*
-                Current problems:
-                - Rising edge only, it should do both but it doesn't
-                - `update` interrupt is not firing at all?
-                - interrupts are cleared without me clearing them
-                 */
-
-                // advanced timer for input capturing
-                let tim1 = p.TIM1;
-
-                // Set counting mode to edge aligned = count from 0 to 16bit max
-                defmt::assert!(tim1.cr1.read().cen().is_disabled()); // must be disabled (is anyways but just to be sure)
-                tim1.ccer.modify(|_, w| w.cc2e().clear_bit());
-
-                // 1. Set count direction and alignment
-
-                {
-                    // Setup timer, this all seems to work as expected
-
-                    tim1.cr1.modify(|_, w| w.dir().up()); // 0 -> upcounting, 1 -> downcounting
-                    tim1.cr1.modify(|_, w| w.cms().edge_aligned()); // edge aligned, count in direction of dir
-
-                    // set timer frequency
-                    // Counter frequency is:
-                    // CK_CNT = fCK_PSC / (PSC[15:0] + 1)
-                    // target_hz = 8Mhz / (PSC + 1)
-                    // PSC = (8Mhz / target_hz) - 1
-                    let target_hz = Hertz(10000); // 1 ms
-
-                    let psc = (rcc.clocks.sysclk().0 / target_hz.0) - 1;
-
-                    if psc > 0xFFFF {
-                        panic!("PSC value too large at {}", psc);
-                    }
-
-                    let psc: u16 = psc.try_into().unwrap();
-
-                    tim1.psc.modify(|_, w| w.psc().bits(psc));
-
-                    // manually generate an update to load the new psc
-                    tim1.egr.write(|w| w.ug().set_bit());
-                }
-
-                // 2. source for counting, which is internal which is default so its fine
-                // empty
-
-                // 3. Set input filter
-                let filter = 0b0000;
-                tim1.ccmr1_input().modify(|_, w| w.ic2f().bits(filter)); // reset value
-                tim1.ccmr1_input().modify(|_, w| w.cc2s().ti2());
-
-                /*
-                Explicitly setting IC2PSC to 0
-                Doing this makes it:
-                - Require clearing of IC2F to 0 in TIM1_CC, otherwise it loops forever (not setting ic2psc makes it *NOT* required to clear that flag?)
-
-                Expected: To have the correct PSC behavior, or none at all with 0
-                */
-                // tim1.ccmr1_input().modify(|_,w| unsafe { w.ic2psc().bits(0) });
-
-                // 4. set input to rising edge
-                /*
-                Doesn't make a difference for some rason, always rising edge
-                Reading CCER also shows that they are 0 even after directly setting them?
-
-                Expected: Correctly triggering TIM1_CC on rising and falling edges
-                */
-                tim1.ccer.modify(|_, w| w.cc2p().set_bit()); // 00 -> rising edge, 11 -> any edge according to docs
-                tim1.ccer.modify(|_, w| w.cc2np().set_bit());
-
-                // 6. Enable capture from counter to the capture register
-                tim1.ccer.modify(|_, w| w.cc2e().set_bit());
-
-                // 7. Enable interrupts
-                /*
-                Strange behavior:
-                - Setting UIE=1 and CC2E=1 makes ONLY TIM1_CC work?
-                - Setting UIE=1 and CC2E=0 makes TIM1_BRK_UP_TRG_COM work as expected with correct values (on every overflow)
-                - URS seems to work as expected but it's hard to tell from the other behavior
-
-                Expected behavior: TIM1_CC should trigger on every rising/falling edge, TIM1_BRK_UP_TRG_COM should trigger on every overflow
-                */
-                tim1.dier.modify(|_, w| w.uie().set_bit()); // update interrupt
-                tim1.cr1.modify(|_, w| w.urs().set_bit()); // only fire update-interrupt on overflow
-                tim1.dier.modify(|_, w| w.cc2ie().set_bit()); // capture interrupt
-
-                // 8. Enable the timer
-                tim1.cr1.modify(|_, w| w.cen().set_bit()); // enable counter
-
-                //grab the timer
-                *ADV_TIMER.borrow(cs).borrow_mut() = Some(tim1);
-            }
+            setup_timer(&p.TIM1);
 
             // Set prio and clear flags
             let mut nvic = cp.NVIC;

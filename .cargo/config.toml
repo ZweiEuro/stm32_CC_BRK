@@ -15,8 +15,11 @@ DEFMT_LOG = "trace"
 [profile.release]
 debug = 2
 lto = true      # Link-time-optimizations for further size reduction
+features = ["clock_8_mhz"]
+
 
 [profile.dev]
 opt-level = "z"
 debug = 2
 lto = true      # Link-time-optimizations for further size reduction
+features = ["clock_8_mhz"]
