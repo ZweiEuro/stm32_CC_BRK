@@ -13,7 +13,7 @@ impl Default for PeriodPattern {
 impl PeriodPattern {
     pub fn new(periods: [u16; 8]) -> Self {
         // go through the pattern and the first 0 denotes the end of the pattern
-        let size = periods.iter().position(|&x| x == 0).unwrap_or(8) as u8;
+        let size = periods.iter().position(|&x| x == 0).unwrap() as u8;
         Self {
             periods,
             size: size,

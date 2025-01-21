@@ -1,3 +1,5 @@
+use crate::patterns::Settings;
+
 use {defmt_rtt as _, panic_probe as _};
 
 use cortex_m::interrupt::Mutex;
@@ -7,7 +9,11 @@ use stm32f0xx_hal::{
     time::Hertz,
 };
 
-use core::{cell::Cell, convert::TryInto, panic};
+use core::{
+    cell::{Cell, RefCell},
+    convert::TryInto,
+    panic,
+};
 
 // Timer we use input capturing on
 pub fn setup_timer(tim1: &TIM1) {
@@ -125,49 +131,51 @@ fn TIM1_BRK_UP_TRG_COM() {
 
 const BUFFER_SIZE: usize = 8;
 
-type BufferData = ringbuffer::ConstGenericRingBuffer<u16, BUFFER_SIZE>;
-
 struct BufferState {
-    buffer: BufferData,
-    current_index: u8, // needed although internally known for ring buffer to reconstruct the window
+    buffer: [u16; BUFFER_SIZE],
+    next_index: u8, // needed although internally known for ring buffer to reconstruct the window
+    dirty: bool,
 }
 
 impl BufferState {
     pub fn new() -> Self {
         Self {
-            buffer: BufferData::new(),
-            current_index: 0,
+            buffer: [0; BUFFER_SIZE],
+            next_index: 0,
+            dirty: false,
         }
     }
 
     pub const fn new_const() -> Self {
         Self {
-            buffer: BufferData::new(),
-            current_index: 0,
+            buffer: [0; BUFFER_SIZE],
+            next_index: 0,
+            dirty: false,
         }
     }
 
     pub fn push(&mut self, value: u16) {
-        self.buffer.push(value);
-        self.current_index = self.current_index + 1 % BUFFER_SIZE as u8;
+        self.buffer[self.next_index as usize] = value;
+        self.next_index = (self.next_index + 1) % (BUFFER_SIZE as u8);
+        self.dirty = true;
     }
 
     pub fn get_window(&self) -> [u16; BUFFER_SIZE] {
         let mut window = [0; BUFFER_SIZE];
 
-        let window_start = self.current_index as usize + 1 % BUFFER_SIZE;
+        // we want the element that was last written to
+        let window_start = self.next_index as usize;
 
         // copy the next BUFFER_SIZE elements into the window
         // the modulo operation is needed to wrap around the buffer
-        let mut window_index = 0;
-        for ringbuffer_index in window_start..window_start + BUFFER_SIZE {
-            let val = self.buffer.get(ringbuffer_index % BUFFER_SIZE);
 
-            if val.is_none() {
+        for window_index in 0..BUFFER_SIZE {
+            let value_index = (window_start + window_index) % BUFFER_SIZE;
+            let val = self.buffer[value_index];
+            if val == 0 {
                 return window;
             } else {
-                window[window_index] = *val.unwrap();
-                window_index += 1;
+                window[window_index] = val;
             }
         }
 
@@ -175,8 +183,8 @@ impl BufferState {
     }
 }
 
-static GLOBAL_DATA: Mutex<Cell<Option<BufferState>>> =
-    Mutex::new(Cell::new(Some(BufferState::new_const())));
+static GLOBAL_DATA: Mutex<RefCell<Option<BufferState>>> =
+    Mutex::new(RefCell::new(Some(BufferState::new_const())));
 
 #[interrupt]
 fn TIM1_CC() {
@@ -186,24 +194,16 @@ fn TIM1_CC() {
         let period = tim1.ccr2.read().bits() as u16;
         tim1.sr.modify(|_, w| w.cc2if().clear_bit());
 
-        if !TIM1_OVERFLOWED && period > 150 {
+        if !TIM1_OVERFLOWED && period > 200 {
             // filter out any noise
             // or large gaps
 
-            cortex_m::interrupt::free(move |cs| {
-                let ringbuffer = GLOBAL_DATA.borrow(cs).take();
+            cortex_m::interrupt::free(|cs| {
+                let mut buf_ref = GLOBAL_DATA.borrow(cs).borrow_mut();
 
-                if ringbuffer.is_none() {
-                    defmt::info!("ringbuffer is none");
-                    let mut ringbuffer = BufferState::new();
-                    ringbuffer.push(period);
-                    GLOBAL_DATA.borrow(cs).replace(Some(ringbuffer));
-                } else {
-                    let mut buf = ringbuffer.unwrap();
+                let buf_ref = buf_ref.as_mut().unwrap();
 
-                    buf.push(period);
-                    GLOBAL_DATA.borrow(cs).replace(Some(buf));
-                }
+                buf_ref.push(period);
             });
         }
 
@@ -212,16 +212,69 @@ fn TIM1_CC() {
     }
 }
 
-pub fn process() {
+pub fn process(settings: &Settings) {
     let mut current_window = [0; BUFFER_SIZE];
 
     cortex_m::interrupt::free(|cs| {
-        let buf_ref = GLOBAL_DATA.borrow(cs).take();
+        let mut buf_ref = GLOBAL_DATA.borrow(cs).borrow_mut();
 
-        if let Some(buffer) = buf_ref {
-            current_window = buffer.get_window();
+        if !buf_ref.is_none() {
+            let buf_ref = buf_ref.as_mut().unwrap();
+
+            if buf_ref.dirty {
+                current_window = buf_ref.get_window();
+                buf_ref.dirty = false;
+            } else {
+                return;
+            }
         }
     });
 
-    defmt::info!("ringbuffer is none {:?}", current_window);
+    if current_window[0] == 0 {
+        return;
+    }
+
+    defmt::info!("Current window: {:?}", current_window);
+
+    // check against all available patterns and if there is a hit print it out
+    let tolerance: f32 = 0.3;
+
+    for pattern in settings.current_patterns {
+        if pattern.size == 0 {
+            continue;
+        }
+
+        for signal_index in 0..BUFFER_SIZE {
+            let target_val = f32::from(pattern.periods[signal_index]);
+            let window_period = f32::from(current_window[signal_index]);
+
+            if target_val == 0.0 {
+                defmt::info!("Pattern hit! Signal end");
+
+                defmt::info!(
+                    "Pattern hit! Pattern {} window {}",
+                    pattern.periods,
+                    current_window
+                );
+
+                loop {
+                    cortex_m::asm::nop();
+                }
+
+                break;
+            }
+
+            if window_period == 0.0 {
+                // miss for sure
+                break;
+            }
+
+            if !(target_val * (1.0 - tolerance) < window_period
+                && window_period < target_val * (1.0 + tolerance))
+            {
+                // the signal value is out of tolerance
+                break;
+            }
+        }
+    }
 }

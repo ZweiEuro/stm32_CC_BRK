@@ -21,7 +21,11 @@ use stm32f0xx_hal::{
 };
 
 use core::{cell::RefCell, convert::TryInto, panic};
-use cortex_m::{asm, interrupt::Mutex, peripheral::Peripherals as c_m_Peripherals};
+use cortex_m::{
+    asm::{self, wfe},
+    interrupt::Mutex,
+    peripheral::Peripherals as c_m_Peripherals,
+};
 use cortex_m_rt::entry;
 
 // A type definition for the GPIO pin to be used for our LED
@@ -147,10 +151,12 @@ fn main() -> ! {
 
     // Setup communication between interrupt and main thread
 
+    // wait for a bit
+    asm::delay(4_000_000);
+
     enable_input_capture();
 
     loop {
-        process();
-        asm::wfe();
+        process(settings);
     }
 }
