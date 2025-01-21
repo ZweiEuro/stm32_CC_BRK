@@ -16,6 +16,8 @@ stm32f0xx-hal = { version = "0.18", features = ["stm32f030x4", "rt"]}
 
 static_cell = "2.1.0"
 portable-atomic = { version = "1.5", features = ["critical-section"] }
+zerocopy = "0.8.14"
+ringbuffer = { version= "0.15.0", default-features = false} # disable "alloc" making it non-std but statically allocable
 
 [features]
 default = [ "clock_8_mhz", "res_micro"] 

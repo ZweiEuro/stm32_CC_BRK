@@ -1,11 +1,13 @@
 use {defmt_rtt as _, panic_probe as _};
 
+use cortex_m::interrupt::Mutex;
+use ringbuffer::RingBuffer;
 use stm32f0xx_hal::{
-    pac::{Interrupt, TIM1},
+    pac::{interrupt, Interrupt, TIM1},
     time::Hertz,
 };
 
-use core::{convert::TryInto, panic};
+use core::{cell::Cell, convert::TryInto, panic};
 
 // Timer we use input capturing on
 pub fn setup_timer(tim1: &TIM1) {
@@ -94,7 +96,7 @@ pub fn enable_input_capture() {
     }
 }
 
-pub fn disable_input_capture(tim1: &TIM1) {
+pub fn disable_input_capture() {
     // Disable capture interrupt
     unsafe {
         let tim1 = &*TIM1::ptr();
@@ -102,4 +104,124 @@ pub fn disable_input_capture(tim1: &TIM1) {
         // Enable capture interrupt
         tim1.ccer.modify(|_, w| w.cc2e().clear_bit());
     }
+}
+
+static mut TIM1_OVERFLOWED: bool = false;
+
+#[interrupt]
+fn TIM1_BRK_UP_TRG_COM() {
+    // clear the interrupt pin
+    unsafe {
+        let tim1 = &*TIM1::ptr();
+
+        if tim1.sr.read().uif().bit_is_clear() {
+            panic!("interrupt flag not set? Why did this trigger?");
+        }
+
+        tim1.sr.modify(|_, w| w.uif().clear_bit());
+        TIM1_OVERFLOWED = true;
+    }
+}
+
+const BUFFER_SIZE: usize = 8;
+
+type BufferData = ringbuffer::ConstGenericRingBuffer<u16, BUFFER_SIZE>;
+
+struct BufferState {
+    buffer: BufferData,
+    current_index: u8, // needed although internally known for ring buffer to reconstruct the window
+}
+
+impl BufferState {
+    pub fn new() -> Self {
+        Self {
+            buffer: BufferData::new(),
+            current_index: 0,
+        }
+    }
+
+    pub const fn new_const() -> Self {
+        Self {
+            buffer: BufferData::new(),
+            current_index: 0,
+        }
+    }
+
+    pub fn push(&mut self, value: u16) {
+        self.buffer.push(value);
+        self.current_index = self.current_index + 1 % BUFFER_SIZE as u8;
+    }
+
+    pub fn get_window(&self) -> [u16; BUFFER_SIZE] {
+        let mut window = [0; BUFFER_SIZE];
+
+        let window_start = self.current_index as usize + 1 % BUFFER_SIZE;
+
+        // copy the next BUFFER_SIZE elements into the window
+        // the modulo operation is needed to wrap around the buffer
+        let mut window_index = 0;
+        for ringbuffer_index in window_start..window_start + BUFFER_SIZE {
+            let val = self.buffer.get(ringbuffer_index % BUFFER_SIZE);
+
+            if val.is_none() {
+                return window;
+            } else {
+                window[window_index] = *val.unwrap();
+                window_index += 1;
+            }
+        }
+
+        window
+    }
+}
+
+static GLOBAL_DATA: Mutex<Cell<Option<BufferState>>> =
+    Mutex::new(Cell::new(Some(BufferState::new_const())));
+
+#[interrupt]
+fn TIM1_CC() {
+    unsafe {
+        // clear the interrupt bit
+        let tim1 = &*TIM1::ptr();
+        let period = tim1.ccr2.read().bits() as u16;
+        tim1.sr.modify(|_, w| w.cc2if().clear_bit());
+
+        if !TIM1_OVERFLOWED && period > 150 {
+            // filter out any noise
+            // or large gaps
+
+            cortex_m::interrupt::free(move |cs| {
+                let ringbuffer = GLOBAL_DATA.borrow(cs).take();
+
+                if ringbuffer.is_none() {
+                    defmt::info!("ringbuffer is none");
+                    let mut ringbuffer = BufferState::new();
+                    ringbuffer.push(period);
+                    GLOBAL_DATA.borrow(cs).replace(Some(ringbuffer));
+                } else {
+                    let mut buf = ringbuffer.unwrap();
+
+                    buf.push(period);
+                    GLOBAL_DATA.borrow(cs).replace(Some(buf));
+                }
+            });
+        }
+
+        // can be done in any case, checking the if would take more cyles
+        TIM1_OVERFLOWED = false;
+    }
+}
+
+pub fn process() {
+    let mut current_window = [0; BUFFER_SIZE];
+
+    cortex_m::interrupt::free(|cs| {
+        let buf_ref = GLOBAL_DATA.borrow(cs).take();
+
+        if let Some(buffer) = buf_ref {
+            current_window = buffer.get_window();
+        }
+    });
+
+    defmt::info!("ringbuffer is none {:?}", current_window);
 }

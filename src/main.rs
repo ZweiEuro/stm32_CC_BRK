@@ -9,7 +9,7 @@ mod patterns;
 
 use {defmt_rtt as _, panic_probe as _};
 
-use input::{enable_input_capture, setup_timer};
+use input::{enable_input_capture, process, setup_timer};
 use patterns::Settings;
 use static_cell::StaticCell;
 use stm32f0xx_hal::{
@@ -79,43 +79,6 @@ fn TIM3() {
     int.wait().ok();
 }
 
-static mut tim1_overflowed: bool = false;
-
-#[interrupt]
-fn TIM1_BRK_UP_TRG_COM() {
-    // clear the interrupt pin
-    unsafe {
-        let tim1 = &*TIM1::ptr();
-
-        if tim1.sr.read().uif().bit_is_clear() {
-            panic!("interrupt flag not set? Why did this trigger?");
-        }
-
-        tim1.sr.modify(|_, w| w.uif().clear_bit());
-        tim1_overflowed = true;
-    }
-}
-
-#[interrupt]
-fn TIM1_CC() {
-    unsafe {
-        // clear the interrupt bit
-        let tim1 = &*TIM1::ptr();
-        let period = tim1.ccr2.read().bits();
-        tim1.sr.modify(|_, w| w.cc2if().clear_bit());
-
-        if !tim1_overflowed && period > 150 {
-            // filter out any noise
-            // or large gaps
-
-            defmt::info!("---- TIM1_CC interrupt {:05} microseconds", period);
-        }
-
-        // can be done in any case, checking the if would take more cyles
-        tim1_overflowed = false;
-    }
-}
-
 #[entry]
 fn main() -> ! {
     if let Some(cp) = c_m_Peripherals::take() {
@@ -175,19 +138,19 @@ fn main() -> ! {
 
     defmt::info!("Hello, world!");
 
-    {
-        static SETTINGS: StaticCell<Settings> = StaticCell::new();
-        let settings = SETTINGS.init(Settings::default());
+    static SETTINGS: StaticCell<Settings> = StaticCell::new();
+    let settings = SETTINGS.init(Settings::default());
 
-        let sync_bit = patterns::PeriodPattern::new([360, 11160, 0, 0, 0, 0, 0, 0]);
+    let sync_bit = patterns::PeriodPattern::new([360, 11160, 0, 0, 0, 0, 0, 0]);
 
-        settings.add_pattern(sync_bit);
-    }
+    settings.add_pattern(sync_bit);
+
+    // Setup communication between interrupt and main thread
 
     enable_input_capture();
 
     loop {
+        process();
         asm::wfe();
-        continue;
     }
 }
