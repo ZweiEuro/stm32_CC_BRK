@@ -2,6 +2,7 @@
 pub struct PeriodPattern {
     pub periods: [u16; 8],
     pub size: u8,
+    pub tolerance: f32,
 }
 
 impl Default for PeriodPattern {
@@ -11,12 +12,13 @@ impl Default for PeriodPattern {
 }
 
 impl PeriodPattern {
-    pub fn new(periods: [u16; 8]) -> Self {
+    pub fn new(periods: [u16; 8], tolerance: f32) -> Self {
         // go through the pattern and the first 0 denotes the end of the pattern
         let size = periods.iter().position(|&x| x == 0).unwrap() as u8;
         Self {
             periods,
             size: size,
+            tolerance: tolerance,
         }
     }
 
@@ -24,6 +26,7 @@ impl PeriodPattern {
         Self {
             periods: [0; 8],
             size: 0,
+            tolerance: 0.0,
         }
     }
 }

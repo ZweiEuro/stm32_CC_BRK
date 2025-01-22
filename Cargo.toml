@@ -20,6 +20,7 @@ zerocopy = "0.8.14"
 ringbuffer = { version= "0.15.0", default-features = false} # disable "alloc" making it non-std but statically allocable
 
 [features]
-default = [ "clock_8_mhz", "res_micro"] 
+default = [ "clock_8_mhz", "res_micro"]
 clock_8_mhz = [] # what is the internal clock speed of the microcontroller
 res_micro = [] # 1 microsecond resolution on the receiver
+debug_recv = []

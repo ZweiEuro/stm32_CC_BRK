@@ -234,10 +234,9 @@ pub fn process(settings: &Settings) {
         return;
     }
 
-    defmt::info!("Current window: {:?}", current_window);
+    // defmt::info!("Current window: {:?}", current_window);
 
     // check against all available patterns and if there is a hit print it out
-    let tolerance: f32 = 0.3;
 
     for pattern in settings.current_patterns {
         if pattern.size == 0 {
@@ -249,18 +248,11 @@ pub fn process(settings: &Settings) {
             let window_period = f32::from(current_window[signal_index]);
 
             if target_val == 0.0 {
-                defmt::info!("Pattern hit! Signal end");
-
                 defmt::info!(
                     "Pattern hit! Pattern {} window {}",
                     pattern.periods,
                     current_window
                 );
-
-                loop {
-                    cortex_m::asm::nop();
-                }
-
                 break;
             }
 
@@ -269,11 +261,19 @@ pub fn process(settings: &Settings) {
                 break;
             }
 
-            if !(target_val * (1.0 - tolerance) < window_period
-                && window_period < target_val * (1.0 + tolerance))
+            if !(target_val * (1.0 - pattern.tolerance) < window_period
+                && window_period < target_val * (1.0 + pattern.tolerance))
             {
                 // the signal value is out of tolerance
                 break;
+            } else {
+                #[cfg(feature = "debug_recv")]
+                defmt::info!(
+                    "Pattern hit! Signal {:06} < {:06} < {:06}",
+                    target_val * (1.0 - pattern.tolerance),
+                    window_period,
+                    target_val * (1.0 + pattern.tolerance)
+                );
             }
         }
     }

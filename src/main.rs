@@ -145,9 +145,13 @@ fn main() -> ! {
     static SETTINGS: StaticCell<Settings> = StaticCell::new();
     let settings = SETTINGS.init(Settings::default());
 
-    let sync_bit = patterns::PeriodPattern::new([360, 11160, 0, 0, 0, 0, 0, 0]);
+    let sync_bit = patterns::PeriodPattern::new([360, 11160, 0, 0, 0, 0, 0, 0], 0.15);
+    let high_bit = patterns::PeriodPattern::new([360, 1080, 360, 1080, 0, 0, 0, 0], 0.15);
+    let low_bit = patterns::PeriodPattern::new([360, 1080, 1080, 360, 0, 0, 0, 0], 0.15);
 
     settings.add_pattern(sync_bit);
+    settings.add_pattern(high_bit);
+    settings.add_pattern(low_bit);
 
     // Setup communication between interrupt and main thread
 
