@@ -138,14 +138,6 @@ struct BufferState {
 }
 
 impl BufferState {
-    pub fn new() -> Self {
-        Self {
-            buffer: [0; BUFFER_SIZE],
-            next_index: 0,
-            dirty: false,
-        }
-    }
-
     pub const fn new_const() -> Self {
         Self {
             buffer: [0; BUFFER_SIZE],
@@ -160,7 +152,10 @@ impl BufferState {
         self.dirty = true;
     }
 
-    pub fn get_window(&self) -> [u16; BUFFER_SIZE] {
+    /**
+     * Return the window that is currently relevant and the start index of the window inside the buffer
+     */
+    pub fn get_window(&self) -> ([u16; BUFFER_SIZE], usize) {
         let mut window = [0; BUFFER_SIZE];
 
         // we want the element that was last written to
@@ -173,13 +168,25 @@ impl BufferState {
             let value_index = (window_start + window_index) % BUFFER_SIZE;
             let val = self.buffer[value_index];
             if val == 0 {
-                return window;
+                return (window, window_start);
             } else {
                 window[window_index] = val;
             }
         }
 
-        window
+        (window, window_start)
+    }
+
+    /**
+     * Clear from `start` `count` number of elements. Sets it all to 0
+     * - This circles back around should `start + end` be larger than the buffer
+     */
+    pub fn clear_region(&mut self, start: usize, count: usize) {
+        for index in start..start + count {
+            self.buffer[index % BUFFER_SIZE] = 0;
+        }
+
+        defmt::info!("buffer: {}", self.buffer);
     }
 }
 
@@ -222,8 +229,25 @@ pub fn process(settings: &Settings) {
             let buf_ref = buf_ref.as_mut().unwrap();
 
             if buf_ref.dirty {
-                current_window = buf_ref.get_window();
+                let window_start_index;
+                (current_window, window_start_index) = buf_ref.get_window();
                 buf_ref.dirty = false;
+
+                for (i, pattern) in settings.current_patterns.iter().enumerate() {
+                    if pattern.match_window(&current_window) {
+                        if i == 0 {
+                            defmt::info!("\n SYNC bit");
+                        } else {
+                            defmt::info!(
+                                "Pattern hit! Pattern {} window {}",
+                                pattern.periods,
+                                current_window
+                            );
+                        }
+
+                        buf_ref.clear_region(window_start_index, pattern.size as usize);
+                    }
+                }
             } else {
                 return;
             }
@@ -237,44 +261,4 @@ pub fn process(settings: &Settings) {
     // defmt::info!("Current window: {:?}", current_window);
 
     // check against all available patterns and if there is a hit print it out
-
-    for pattern in settings.current_patterns {
-        if pattern.size == 0 {
-            continue;
-        }
-
-        for signal_index in 0..BUFFER_SIZE {
-            let target_val = f32::from(pattern.periods[signal_index]);
-            let window_period = f32::from(current_window[signal_index]);
-
-            if target_val == 0.0 {
-                defmt::info!(
-                    "Pattern hit! Pattern {} window {}",
-                    pattern.periods,
-                    current_window
-                );
-                break;
-            }
-
-            if window_period == 0.0 {
-                // miss for sure
-                break;
-            }
-
-            if !(target_val * (1.0 - pattern.tolerance) < window_period
-                && window_period < target_val * (1.0 + pattern.tolerance))
-            {
-                // the signal value is out of tolerance
-                break;
-            } else {
-                #[cfg(feature = "debug_recv")]
-                defmt::info!(
-                    "Pattern hit! Signal {:06} < {:06} < {:06}",
-                    target_val * (1.0 - pattern.tolerance),
-                    window_period,
-                    target_val * (1.0 + pattern.tolerance)
-                );
-            }
-        }
-    }
 }
