@@ -20,6 +20,9 @@ pub fn setup_timer(tim3: &TIM3, pclk: Hertz) {
     // Disable capture interrupt
     tim3.ccer.modify(|_, w| w.cc1e().clear_bit());
 
+    // configure as input capture mode
+    tim3.ccmr1_input().modify(|_, w| w.cc1s().ti1());
+
     {
         // Setup timer, this all seems to work as expected
         // 1. Set count direction and alignment
@@ -43,6 +46,8 @@ pub fn setup_timer(tim3: &TIM3, pclk: Hertz) {
             panic!("PSC value too large at {}", psc);
         }
 
+        defmt::info!("PSC: {}", psc);
+
         let psc: u16 = psc.try_into().unwrap(); // this will crash should the value not fit into psc
 
         tim3.psc.modify(|_, w| w.psc().bits(psc));
@@ -52,9 +57,8 @@ pub fn setup_timer(tim3: &TIM3, pclk: Hertz) {
     }
 
     // 3. Set input filter
-    let filter: u8 = 0b1111; // sample with 8 samples, normal frequency
+    let filter: u8 = 0b0000; // sample with 8 samples, normal frequency
     tim3.ccmr1_input().modify(|_, w| w.ic1f().bits(filter));
-    tim3.ccmr1_input().modify(|_, w| w.cc1s().ti1());
 
     // 4. set input to rising and falling edge
     // 00 -> rising edge, 11 -> any edge
@@ -70,8 +74,8 @@ pub fn setup_timer(tim3: &TIM3, pclk: Hertz) {
     tim3.dier.modify(|_, w| w.cc1ie().set_bit()); // capture interrupt
 
     tim3.cr1.modify(|_, w| w.urs().set_bit()); // only fire update-interrupt on overflow
-                                               //tim3.dier.modify(|_, w| w.uie().set_bit()); // enable updated interrupts
-    tim3.dier.modify(|_, w| w.cc1ie().set_bit());
+    tim3.dier.modify(|_, w| w.uie().set_bit()); // enable updated interrupts
+    tim3.dier.modify(|_, w| w.tie().set_bit()); // enable trigger interrupts
 
     tim3.cr1.modify(|_, w| w.cen().set_bit()); // enable counter
 
@@ -166,17 +170,24 @@ static GLOBAL_DATA: Mutex<RefCell<Option<BufferState>>> =
 
 static mut TIM_OVERFLOWED: bool = false;
 
+static mut TIM_OVERFLOW_COUNTER: u16 = 0;
+
 #[interrupt]
 fn TIM3() {
     unsafe {
         // clear the interrupt bit
         let tim3 = &*TIM3::ptr();
 
-        let sr = tim3.sr.read().bits();
-        let ccr1 = tim3.ccr1.read().bits() as u16;
+        if tim3.sr.read().uif().bit_is_set() {
+            TIM_OVERFLOW_COUNTER += 1;
+        }
 
-        if ccr1 > 200 {
-            defmt::info!("TIM3 SR: {:#01b} ccer: {:?}", sr, ccr1);
+        if tim3.sr.read().cc1if().bit_is_set() {
+            defmt::info!(
+                "period: {:?}",
+                tim3.ccr1.read().bits() as u32 + 65536 * TIM_OVERFLOW_COUNTER as u32
+            );
+            TIM_OVERFLOW_COUNTER = 0;
         }
 
         tim3.sr.reset();

@@ -78,13 +78,14 @@ fn main() -> ! {
     if let Some(mut p) = Peripherals::take() {
         cortex_m::interrupt::free(move |cs| {
             p.RCC.apb1enr.modify(|_, w| w.tim3en().set_bit());
+            p.RCC.ahbenr.modify(|_, w| w.iopaen().set_bit());
             // p.RCC.apb2enr.modify(|_, w| w.usart1en().set_bit());
 
             let mut rcc = p
                 .RCC
                 .configure()
-                .sysclk(48.mhz())
-                .pclk(48.mhz())
+                .sysclk(8.mhz())
+                .pclk(8.mhz())
                 .freeze(&mut p.FLASH);
 
             let gpioa = p.GPIOA.split(&mut rcc);
@@ -144,6 +145,8 @@ fn main() -> ! {
     defmt::info!("Input capture enabled");
 
     loop {
-        process(settings);
+        asm::wfi();
+
+        //process(settings);
     }
 }
