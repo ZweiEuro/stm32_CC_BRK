@@ -1,20 +1,18 @@
-const PERIOD_SIZE: usize = 8;
-
 #[derive(Debug, Copy, Clone)]
-pub struct PeriodPattern {
+pub struct PeriodPattern<const PERIOD_SIZE: usize> {
     pub periods: [u16; PERIOD_SIZE],
     pub size: u8,
-    pub tolerance: f32,
+    pub tolerance: f64,
 }
 
-impl Default for PeriodPattern {
+impl<const PERIOD_SIZE: usize> Default for PeriodPattern<PERIOD_SIZE> {
     fn default() -> Self {
         Self::new_const()
     }
 }
 
-impl PeriodPattern {
-    pub fn new(periods: [u16; PERIOD_SIZE], tolerance: f32) -> Self {
+impl<const PERIOD_SIZE: usize> PeriodPattern<PERIOD_SIZE> {
+    pub fn new(periods: [u16; PERIOD_SIZE], tolerance: f64) -> Self {
         // go through the pattern and the first 0 denotes the end of the pattern
         let size = periods.iter().position(|&x| x == 0).unwrap() as u8;
         Self {
@@ -33,14 +31,14 @@ impl PeriodPattern {
     }
 
     #[inline]
-    pub fn match_window(&self, signal_pattern: &[u16; PERIOD_SIZE]) -> bool {
+    pub fn match_window(&self, signal_pattern: &[u32; PERIOD_SIZE]) -> bool {
         if self.size == 0 {
             return false;
         }
 
         for signal_index in 0..PERIOD_SIZE {
-            let target_val = f32::from(self.periods[signal_index]);
-            let signal_period = f32::from(signal_pattern[signal_index]);
+            let target_val = f64::from(self.periods[signal_index]);
+            let signal_period = f64::from(signal_pattern[signal_index]);
 
             if target_val == 0.0 {
                 // we are 'done'
@@ -73,12 +71,12 @@ impl PeriodPattern {
 }
 
 // create a read only interator
-pub struct PeriodPatternIter<'a> {
-    pattern: &'a PeriodPattern,
+pub struct PeriodPatternIter<'a, const PERIOD_SIZE: usize> {
+    pattern: &'a PeriodPattern<PERIOD_SIZE>,
     index: u8,
 }
 
-impl<'a> Iterator for PeriodPatternIter<'a> {
+impl<'a, const PERIOD_SIZE: usize> Iterator for PeriodPatternIter<'a, PERIOD_SIZE> {
     type Item = u16;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -92,9 +90,9 @@ impl<'a> Iterator for PeriodPatternIter<'a> {
     }
 }
 
-impl<'a> IntoIterator for &'a PeriodPattern {
+impl<'a, const PERIOD_SIZE: usize> IntoIterator for &'a PeriodPattern<PERIOD_SIZE> {
     type Item = u16;
-    type IntoIter = PeriodPatternIter<'a>;
+    type IntoIter = PeriodPatternIter<'a, PERIOD_SIZE>;
 
     fn into_iter(self) -> Self::IntoIter {
         PeriodPatternIter {

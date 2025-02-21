@@ -9,7 +9,7 @@ mod patterns;
 
 use {defmt_rtt as _, panic_probe as _};
 
-use input::{enable_input_capture, process, setup_timer};
+use input::{process, InputCapture};
 use patterns::Settings;
 use static_cell::StaticCell;
 use stm32f0xx_hal::{
@@ -84,8 +84,8 @@ fn main() -> ! {
             let mut rcc = p
                 .RCC
                 .configure()
-                .sysclk(8.mhz())
-                .pclk(8.mhz())
+                .sysclk(32.mhz())
+                .pclk(32.mhz())
                 .freeze(&mut p.FLASH);
 
             let gpioa = p.GPIOA.split(&mut rcc);
@@ -110,7 +110,7 @@ fn main() -> ! {
                 // setup input capturing 434 Mhz
 
                 gpioa.pa6.into_alternate_af1(cs);
-                setup_timer(&p.TIM3, rcc.clocks.pclk());
+                InputCapture::init(p.TIM3, rcc.clocks.pclk());
             }
 
             unsafe {
@@ -140,13 +140,13 @@ fn main() -> ! {
     // wait for a bit
     asm::delay(4_000_000);
 
-    enable_input_capture();
+    InputCapture::enable_input_capture();
 
     defmt::info!("Input capture enabled");
 
     loop {
         asm::wfi();
 
-        //process(settings);
+        process(settings);
     }
 }

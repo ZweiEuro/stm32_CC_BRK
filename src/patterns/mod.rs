@@ -1,12 +1,9 @@
 mod patterns;
 
-use core::cell::{RefCell, RefMut};
-
-use cortex_m::interrupt::{CriticalSection, Mutex};
 pub use patterns::*;
 
 pub struct Settings {
-    pub current_patterns: [PeriodPattern; 8],
+    pub current_patterns: [PeriodPattern<8>; 8],
 }
 
 impl Default for Settings {
@@ -18,7 +15,7 @@ impl Default for Settings {
 }
 
 impl Settings {
-    pub fn add_pattern(&mut self, pattern: PeriodPattern) {
+    pub fn add_pattern(&mut self, pattern: PeriodPattern<8>) {
         for i in 0..self.current_patterns.len() {
             if self.current_patterns[i].size == 0 {
                 self.current_patterns[i] = pattern;
